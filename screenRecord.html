@@ -1,0 +1,324 @@
+<style>
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    font-size: 1em;
+  }
+
+  video {
+    width: 80%;
+    border-radius: 5px;
+    border: 1px solid black;
+  }
+
+  canvas {
+    margin: 40px 5px 5px 0px;
+    width: 80%;
+  }
+
+  input[type=range] {
+    display: block;
+    width: 80%;
+    margin: auto;
+    padding-top: 5px;
+  }
+</style>
+
+<title>Screen Recording</title>
+<h1>Screen Recording using RecordRTC</h1>
+
+<br>
+<button id="btn-capture-screen" disabled>Take snapshot</button>
+<button id="btn-start-recording">Start Recording</button>
+<button id="btn-stop-recording" disabled>Stop Recording</button>
+<button id="btn-save-to-disk" disabled>Save To Disk</button>
+<input type="file" accept="video/*" id="upload" onchange="upload()">
+
+
+<hr>
+<video id="Test_Video" width="700" height="400" controls autoplay preload="metadata"></video>
+<hr>
+<h3>Screen Capture</h3>
+<canvas id="myCanvas" width="200" height="100"></canvas>
+
+<script src="./RecordRTC.js"></script>
+<script src="./EBML.js"></script>
+<script src="./adapter-latest.js"></script>
+<script>
+  'use strict';
+  var video = document.querySelector('video');
+  const startBtn = document.getElementById('btn-start-recording');
+  const stopBtn = document.getElementById('btn-stop-recording');
+  const saveBtn = document.getElementById('btn-save-to-disk');
+  const captureBtn = document.getElementById('btn-capture-screen');
+  var canvas = document.getElementById('myCanvas');
+
+  if (!navigator.getDisplayMedia && !navigator.mediaDevices.getDisplayMedia) {
+    var error = 'Your browser does NOT support the getDisplayMedia API.';
+    document.querySelector('h1').innerHTML = error;
+    document.querySelector('video').style.display = 'none';
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'none';
+    throw new Error(error);
+  }
+
+  function invokeGetDisplayMedia(success, error) {
+    var displayMediaOptions = {
+      video: {
+        displaySurface: 'monitor', // monitor, window, application, browser
+        logicalSurface: true,
+        cursor: 'always' // never, always, motion
+      }
+    };
+
+    // above constraints are NOT supported YET
+    // that's why overriding them
+    displayMediaOptions = {
+      video: true
+    };
+
+    if (navigator.mediaDevices.getDisplayMedia) {
+      navigator.mediaDevices.getDisplayMedia(displayMediaOptions).then(success).catch(error);
+    }
+    else {
+      navigator.getDisplayMedia(displayMediaOptions).then(success).catch(error);
+    }
+  }
+
+  function captureScreen(callback) {
+    invokeGetDisplayMedia(function (screen) {
+      addStreamStopListener(screen, function () {
+        document.getElementById('btn-stop-recording').click();
+      });
+      callback(screen);
+    }, function (error) {
+      console.error(error);
+      alert('Unable to capture your screen. Please check console logs.\n' + error);
+    });
+  }
+
+  function stopRecordingCallback() {
+    video.src = video.srcObject = null;
+    getSeekableBlob(recorder.getBlob(), function (seekBlob) {
+      video.src = URL.createObjectURL(seekBlob);
+      recorder.screen.stop();
+      seekableBlob = seekBlob;
+      convertStreams(seekBlob);
+    });
+    console.log("stop recording", video.duration)
+    startBtn.disabled = false;
+  }
+
+  var recorder; // globally accessible
+  var seekableBlob;
+
+  startBtn.onclick = function () {
+    this.disabled = true;
+    captureScreen(function (screen) {
+      video.srcObject = screen;
+
+      recorder = RecordRTC(screen, {
+        type: 'video'
+      });
+
+      recorder.startRecording();
+      // release screen on stopRecording
+      recorder.screen = screen;
+
+      stopBtn.disabled = false;
+    });
+  };
+
+  stopBtn.onclick = function () {
+    this.disabled = true;
+    recorder.stopRecording(stopRecordingCallback);
+    saveBtn.disabled = false;
+    captureBtn.disabled = false;
+  };
+
+  saveBtn.onclick = function () {
+    if (!recorder) return alert('No recording found.');
+    recorder.destroy();
+    recorder = null;
+    invokeSaveAsDialog(seekableBlob, fileName);
+  };
+
+  captureBtn.onclick = function () {
+    takeSnapshot(video);
+  };
+
+  function upload() {
+    var input = document.getElementById("upload");
+    var fReader = new FileReader();
+    fReader.readAsDataURL(input.files[0]);
+    fReader.onload = function () {
+      console.log(fReader);
+      video.src = fReader.result;
+    }
+  }
+
+  function takeSnapshot(video) {
+    canvas.width = video.videoWidth || video.clientWidth;
+    canvas.height = video.videoHeight || video.clientHeight;
+
+    var context = canvas.getContext('2d');
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  };
+
+  var mimeType = 'video/webm';
+  var fileExtension = 'webm';
+  var type = 'video';
+  var fileName = getFileName(fileExtension);
+
+  function getFileName(fileExtension) {
+    var d = new Date();
+    var year = d.getUTCFullYear();
+    var month = d.getUTCMonth();
+    var date = d.getUTCDate();
+    var hours = d.getHours();
+    var minutes = d.getMinutes();
+    return 'ScreenRecord_' + d.getDate() + "/"
+      + (d.getMonth() + 1) + "/"
+      + d.getFullYear() + " @ "
+      + d.getHours() + ":"
+      + d.getMinutes();
+  };
+
+  function addStreamStopListener(stream, callback) {
+    stream.addEventListener('ended', function () {
+      callback();
+      callback = function () { };
+    }, false);
+    stream.addEventListener('inactive', function () {
+      callback();
+      callback = function () { };
+    }, false);
+    stream.getTracks().forEach(function (track) {
+      track.addEventListener('ended', function () {
+        callback();
+        callback = function () { };
+      }, false);
+      track.addEventListener('inactive', function () {
+        callback();
+        callback = function () { };
+      }, false);
+    });
+  }
+  var workerPath = 'https://archive.org/download/ffmpeg_asm/ffmpeg_asm.js';
+                if(document.domain == 'localhost') {
+                    workerPath = location.href.replace(location.href.split('/').pop(), '') + 'ffmpeg_asm.js';
+  }
+  function processInWebWorker() {
+    var blob = URL.createObjectURL(new Blob(['importScripts("' + workerPath + '");var now = Date.now;function print(text) {postMessage({"type" : "stdout","data" : text});};onmessage = function(event) {var message = event.data;if (message.type === "command") {var Module = {print: print,printErr: print,files: message.files || [],arguments: message.arguments || [],TOTAL_MEMORY: message.TOTAL_MEMORY || false};postMessage({"type" : "start","data" : Module.arguments.join(" ")});postMessage({"type" : "stdout","data" : "Received command: " +Module.arguments.join(" ") +((Module.TOTAL_MEMORY) ? ".  Processing with " + Module.TOTAL_MEMORY + " bits." : "")});var time = now();var result = ffmpeg_run(Module);var totalTime = now() - time;postMessage({"type" : "stdout","data" : "Finished processing (took " + totalTime + "ms)"});postMessage({"type" : "done","data" : result,"time" : totalTime});}};postMessage({"type" : "ready"});'], {
+      type: 'application/javascript'
+    }));
+
+    var worker = new Worker(blob);
+    URL.revokeObjectURL(blob);
+    return worker;
+  }
+
+  
+ 
+  var worker;
+
+  function convertStreams(videoBlob) {
+    var aab;
+    var buffersReady;
+    var workerReady;
+    var posted;
+
+    var fileReader = new FileReader();
+    fileReader.onload = function () {
+      aab = this.result;
+      postMessage();
+    };
+    fileReader.readAsArrayBuffer(videoBlob);
+
+    if (!worker) {
+      worker = processInWebWorker();
+    }
+    var postMessage = function () {
+      posted = true;
+
+      worker.postMessage({
+        type: 'command',
+        arguments: '-i video.webm -c:v mpeg4 -b:v 6400k -strict experimental output.mp4'.split(' '),
+        files: [
+          {
+            data: new Uint8Array(aab),
+            name: 'video.webm'
+          }
+        ]
+      });
+    };
+
+    worker.onmessage = function (event) {
+      var message = event.data;
+      if (message.type == "ready") {
+        log('<a href="' + workerPath + '" download="ffmpeg-asm.js">ffmpeg-asm.js</a> file has been loaded.');
+
+        workerReady = true;
+        if (buffersReady)
+          postMessage();
+      } else if (message.type == "stdout") {
+        log(message.data);
+      } else if (message.type == "start") {
+        log('<a href="' + workerPath + '" download="ffmpeg-asm.js">ffmpeg-asm.js</a> file received ffmpeg command.');
+      } else if (message.type == "done") {
+        log(JSON.stringify(message));
+
+        var result = message.data[0];
+        log(JSON.stringify(result));
+
+        var blob = new File([result.data], 'test.mp4', {
+          type: 'video/mp4'
+        });
+
+        log(JSON.stringify(blob));
+
+        PostBlob(blob);
+      }
+    };
+  }
+    
+  function PostBlob(blob) {
+    var video = document.createElement('video');
+    video.controls = true;
+
+    var source = document.createElement('source');
+    source.src = URL.createObjectURL(blob);
+    source.type = 'video/mp4; codecs=mpeg4';
+    video.appendChild(source);
+
+    video.download = 'Play mp4 in VLC Player.mp4';
+
+    inner.appendChild(document.createElement('hr'));
+    var h2 = document.createElement('h2');
+    h2.innerHTML = '<a href="' + source.src + '" target="_blank" download="Play mp4 in VLC Player.mp4" style="font-size:200%;color:red;">Download Converted mp4 and play in VLC player!</a>';
+    inner.appendChild(h2);
+    h2.style.display = 'block';
+    inner.appendChild(video);
+
+    video.tabIndex = 0;
+    video.focus();
+    video.play();
+
+    document.querySelector('#record-video').disabled = false;
+  }
+</script>
+
+<br><br>
+
+<footer style="margin-top: 20px; text-align: left;">
+  <p style="padding: 5px 10px;"><b>Hints:</b> Are you using Chrome version 71? Please enable
+    "chrome://flags/#enable-experimental-web-platform-features"</p>
+  <p style="padding: 5px 10px;"><b>Browser support:</b> Firefox, Edge and Chrome &gt= 71</p>
+  <div><small id="send-message"></small></div>
+</footer>
+<script>
+  window.useThisGithubPath = 'muaz-khan/Ffmpeg.js';
+</script>
